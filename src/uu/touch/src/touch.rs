@@ -285,6 +285,7 @@ fn determine_times(opts: &Options) -> UResult<(FileTime, FileTime)> {
     }
 }
 
+/// Execute the touch command.
 pub fn touch(files: &[OsString], opts: &Options) -> UResult<()> {
     let (atime, mtime) = determine_times(opts)?;
 
@@ -341,7 +342,8 @@ pub fn touch(files: &[OsString], opts: &Options) -> UResult<()> {
     Ok(())
 }
 
-/// If `--time` is given, returns whether or not it is equivalent to `-a` or `-m`. Otherwise `None`.
+/// If `--time` is given, returns whether it is equivalent to `-a` (change access time only) or
+/// `-m` (change modification time only). Otherwise, returns `None`.
 fn determine_atime_mtime_change(matches: &ArgMatches) -> Option<bool> {
     if matches.contains_id(options::TIME) {
         matches
