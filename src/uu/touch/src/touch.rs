@@ -124,9 +124,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         .cloned()
         .collect();
 
-    let time = determine_atime_mtime_change(&matches);
-    let change_atime = matches.get_flag(options::ACCESS) || time.unwrap_or_default();
-    let change_mtime = matches.get_flag(options::MODIFICATION) || time.map_or(false, |m| !m);
+    let (change_atime, change_mtime) = determine_atime_mtime_change(&matches);
 
     let no_deref = matches.get_flag(options::NO_DEREF);
 
@@ -148,23 +146,11 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         }
     };
 
-    // Note that "-a" and "-m" may be passed together; this is not an xor.
-    let atime = if !change_mtime || change_atime {
-        Some(atime)
-    } else {
-        None
-    };
-    let mtime = if !change_atime || change_mtime {
-        Some(mtime)
-    } else {
-        None
-    };
-
     let opts = Options {
         no_create: matches.get_flag(options::NO_CREATE),
         no_deref,
-        atime,
-        mtime,
+        atime: if change_atime { Some(atime) } else { None },
+        mtime: if change_mtime { Some(mtime) } else { None },
     };
 
     for filename in files {
@@ -344,25 +330,29 @@ pub fn touch(file: &InputFile, opts: &Options) -> UResult<()> {
     update_times(path, is_stdout, opts)
 }
 
-/// If `--time` is given, returns whether it is equivalent to `-a` (change access time only) or
-/// `-m` (change modification time only). Otherwise, returns `None`.
-fn determine_atime_mtime_change(matches: &ArgMatches) -> Option<bool> {
-    if matches.contains_id(options::TIME) {
+/// Returns whether atime and mtime are to be changed.
+/// Note: If none of `-a`, `-m`, and `--time` are passed, the result is `(true, true)`, not `(false, false)`
+fn determine_atime_mtime_change(matches: &ArgMatches) -> (bool, bool) {
+    // If `--time` is given, Some(true) if equivalent to `-a`, Some(false) if equivalent to `-m`
+    // If `--time` not given, Nones
+    let time_access_only = if matches.contains_id(options::TIME) {
         matches
             .get_one::<String>(options::TIME)
             .map(|time| time.contains("access") || time.contains("atime") || time.contains("use"))
     } else {
         None
-    }
+    };
+
+    let atime_only = matches.get_flag(options::ACCESS) || time_access_only.unwrap_or_default();
+    let mtime_only = matches.get_flag(options::MODIFICATION) || !time_access_only.unwrap_or(true);
+
+    // Note that "-a" and "-m" may be passed together; this is not an xor.
+    (atime_only || !mtime_only, mtime_only || !atime_only)
 }
 
 // Updating file access and modification times based on user-specified options
 fn update_times(path: &Path, is_stdout: bool, opts: &Options) -> UResult<()> {
     let (atime, mtime) = match (opts.atime, opts.mtime) {
-        (None, None) => {
-            // Minor optimization: if no reference time was specified, we're done.
-            return Ok(());
-        }
         (Some(atime), Some(mtime)) => (atime, mtime),
         _ => {
             // If changing "only" atime or mtime, grab the existing value of the other.
@@ -593,6 +583,8 @@ fn pathbuf_from_stdout() -> UResult<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use crate::{determine_atime_mtime_change, uu_app};
+
     #[cfg(windows)]
     #[test]
     fn test_get_pathbuf_from_stdout_fails_if_stdout_is_not_a_file() {
@@ -602,5 +594,25 @@ mod tests {
             .expect_err("pathbuf_from_stdout should have failed")
             .to_string()
             .contains("GetFinalPathNameByHandleW failed with code 1"));
+    }
+
+    #[test]
+    fn test_determine_atime_mtime_change() {
+        assert_eq!(
+            (true, true),
+            determine_atime_mtime_change(&uu_app().try_get_matches_from(vec!["touch"]).unwrap())
+        );
+        assert_eq!(
+            (true, true),
+            determine_atime_mtime_change(&uu_app().try_get_matches_from(vec!["touch", "-a", "-m", "--time", "modify"]).unwrap())
+        );
+        assert_eq!(
+            (true, false),
+            determine_atime_mtime_change(&uu_app().try_get_matches_from(vec!["touch", "--time", "access"]).unwrap())
+        );
+        assert_eq!(
+            (false, true),
+            determine_atime_mtime_change(&uu_app().try_get_matches_from(vec!["touch", "-m"]).unwrap())
+        );
     }
 }
