@@ -287,8 +287,6 @@ fn determine_times_from_ref(
 /// If the user doesn't have permission to access the file, or if one of the directory
 /// components of the file path doesn't exist
 pub fn touch(file: &InputFile, opts: &Options) -> UResult<()> {
-    // FIXME: find a way to avoid having to clone the path
-    // TODO (ysthakur) ^ Fixed with the Cow?
     let (path, is_stdout) = match file {
         InputFile::Stdout => (Cow::Owned(pathbuf_from_stdout()?), true),
         InputFile::Path(path) => (Cow::Borrowed(path), false),
