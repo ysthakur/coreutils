@@ -6,7 +6,7 @@
 // spell-checker:ignore (ToDO) filetime datetime lpszfilepath mktime DATETIME datelike timelike
 // spell-checker:ignore (FORMATS) MMDDhhmm YYYYMMDDHHMM YYMMDDHHMM YYYYMMDDHHMMS
 
-mod error;
+pub mod error;
 
 use chrono::{
     DateTime, Datelike, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime,
