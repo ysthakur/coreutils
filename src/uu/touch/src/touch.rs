@@ -6,6 +6,8 @@
 // spell-checker:ignore (ToDO) filetime datetime lpszfilepath mktime DATETIME datelike timelike
 // spell-checker:ignore (FORMATS) MMDDhhmm YYYYMMDDHHMM YYMMDDHHMM YYYYMMDDHHMMS
 
+mod error;
+
 use chrono::{
     DateTime, Datelike, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime,
     TimeZone, Timelike,
@@ -18,8 +20,10 @@ use std::ffi::OsString;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use uucore::display::Quotable;
-use uucore::error::{FromIo, UResult, USimpleError};
-use uucore::{format_usage, help_about, help_usage, show};
+use uucore::error::{UResult, USimpleError};
+use uucore::{format_usage, help_about, help_usage};
+
+use crate::error::TouchError;
 
 /// Options contains all the possible behaviors and flags for touch.
 ///
@@ -266,14 +270,13 @@ fn determine_times_from_ref(
     reference: &Path,
     date: Option<&String>,
     no_deref: bool,
-) -> UResult<(FileTime, FileTime)> {
+) -> Result<(FileTime, FileTime), TouchError> {
     if let Some(date) = date {
         let (atime, mtime) = stat(reference, !no_deref)?;
         let atime = filetime_to_datetime(&atime)
-            .ok_or_else(|| USimpleError::new(1, "Could not process the reference access time"))?;
-        let mtime = filetime_to_datetime(&mtime).ok_or_else(|| {
-            USimpleError::new(1, "Could not process the reference modification time")
-        })?;
+            .ok_or_else(|| TouchError::InvalidFiletime(reference.to_owned(), atime))?;
+        let mtime = filetime_to_datetime(&mtime)
+            .ok_or_else(|| TouchError::InvalidFiletime(reference.to_owned(), mtime))?;
         Ok((parse_date(atime, date)?, parse_date(mtime, date)?))
     } else {
         stat(reference, !no_deref)
@@ -286,7 +289,7 @@ fn determine_times_from_ref(
 ///
 /// If the user doesn't have permission to access the file, or if one of the directory
 /// components of the file path doesn't exist
-pub fn touch(file: &InputFile, opts: &Options) -> UResult<()> {
+pub fn touch(file: &InputFile, opts: &Options) -> Result<(), TouchError> {
     let (path, is_stdout) = match file {
         InputFile::Stdout => (Cow::Owned(pathbuf_from_stdout()?), true),
         InputFile::Path(path) => (Cow::Borrowed(path), false),
@@ -301,7 +304,7 @@ pub fn touch(file: &InputFile, opts: &Options) -> UResult<()> {
 
     if let Err(e) = metadata_result {
         if e.kind() != std::io::ErrorKind::NotFound {
-            return Err(e.map_err_context(|| format!("setting times of {}", path.quote())));
+            return Err(TouchError::CannotReadAttributes(path.to_owned(), e.kind()));
         }
 
         if opts.no_create {
@@ -309,19 +312,11 @@ pub fn touch(file: &InputFile, opts: &Options) -> UResult<()> {
         }
 
         if opts.no_deref {
-            show!(USimpleError::new(
-                1,
-                format!(
-                    "setting times of {}: No such file or directory",
-                    path.quote()
-                )
-            ));
-            return Ok(());
+            return Err(TouchError::TargetFileNotFound(path.to_owned()));
         }
 
         if let Err(e) = File::create(path) {
-            show!(e.map_err_context(|| format!("cannot touch {}", path.quote())));
-            return Ok(());
+            return Err(TouchError::CannotCreate(path.to_owned(), e.kind()));
         };
     }
 
@@ -349,7 +344,7 @@ fn determine_atime_mtime_change(matches: &ArgMatches) -> (bool, bool) {
 }
 
 // Updating file access and modification times based on user-specified options
-fn update_times(path: &Path, is_stdout: bool, opts: &Options) -> UResult<()> {
+fn update_times(path: &Path, is_stdout: bool, opts: &Options) -> Result<(), TouchError> {
     let (atime, mtime) = match (opts.atime, opts.mtime) {
         (Some(atime), Some(mtime)) => (atime, mtime),
         _ => {
@@ -373,20 +368,25 @@ fn update_times(path: &Path, is_stdout: bool, opts: &Options) -> UResult<()> {
     } else {
         set_file_times(path, atime, mtime)
     }
-    .map_err_context(|| format!("setting times of {}", path.quote()))
+    .map_err(|e| TouchError::CannotSetAttributes(path.to_owned(), e.kind()))
 }
 
 // Get metadata of the provided path
 // If `follow` is `true`, the function will try to follow symlinks
 // If `follow` is `false` or the symlink is broken, the function will return metadata of the symlink itself
-pub fn stat(path: &Path, follow: bool) -> UResult<(FileTime, FileTime)> {
-    // TODO (ysthakur) if follow is false and the symlink isn't broken, this won't return the metadata of the symlink. Intended or bug?
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !follow => fs::symlink_metadata(path)
-            .map_err_context(|| format!("failed to get attributes of {}", path.quote()))?,
-        Err(e) => return Err(e.into()),
-    };
+pub fn stat(path: &Path, follow: bool) -> Result<(FileTime, FileTime), TouchError> {
+    let metadata = if follow {
+        fs::metadata(path).or_else(|_| fs::symlink_metadata(path))
+    } else {
+        fs::symlink_metadata(path)
+    }
+    .map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            TouchError::ReferenceFileNotFound(path.to_owned())
+        } else {
+            TouchError::CannotReadAttributes(path.to_owned(), e.kind())
+        }
+    })?;
 
     Ok((
         FileTime::from_last_access_time(&metadata),
@@ -394,7 +394,7 @@ pub fn stat(path: &Path, follow: bool) -> UResult<(FileTime, FileTime)> {
     ))
 }
 
-fn parse_date(ref_time: DateTime<Local>, s: &str) -> UResult<FileTime> {
+fn parse_date(ref_time: DateTime<Local>, s: &str) -> Result<FileTime, TouchError> {
     // This isn't actually compatible with GNU touch, but there doesn't seem to
     // be any simple specification for what format this parameter allows and I'm
     // not about to implement GNU parse_datetime.
@@ -447,7 +447,7 @@ fn parse_date(ref_time: DateTime<Local>, s: &str) -> UResult<FileTime> {
         return Ok(datetime_to_filetime(&dt));
     }
 
-    Err(USimpleError::new(1, format!("Unable to parse date: {s}")))
+    Err(TouchError::InvalidDateFormat(s.to_owned()))
 }
 
 fn parse_timestamp(s: &str) -> UResult<FileTime> {
@@ -512,7 +512,7 @@ fn parse_timestamp(s: &str) -> UResult<FileTime> {
 ///
 /// On Windows, uses GetFinalPathNameByHandleW to attempt to get the path
 /// from the stdout handle.
-fn pathbuf_from_stdout() -> UResult<PathBuf> {
+fn pathbuf_from_stdout() -> Result<PathBuf, TouchError> {
     #[cfg(all(unix, not(target_os = "android")))]
     {
         Ok(PathBuf::from("/dev/stdout"))
@@ -554,27 +554,23 @@ fn pathbuf_from_stdout() -> UResult<PathBuf> {
 
         let buffer_size = match ret {
             ERROR_PATH_NOT_FOUND | ERROR_NOT_ENOUGH_MEMORY | ERROR_INVALID_PARAMETER => {
-                return Err(USimpleError::new(
-                    1,
-                    format!("GetFinalPathNameByHandleW failed with code {ret}"),
-                ))
+                return Err(TouchError::WindowsStdoutPathError(format!(
+                    "GetFinalPathNameByHandleW failed with code {ret}"
+                )))
             }
             0 => {
-                return Err(USimpleError::new(
-                    1,
-                    format!(
-                        "GetFinalPathNameByHandleW failed with code {}",
-                        // SAFETY: GetLastError is thread-safe and has no documented memory unsafety.
-                        unsafe { GetLastError() }
-                    ),
-                ));
+                return Err(TouchError::WindowsStdoutPathError(format!(
+                    "GetFinalPathNameByHandleW failed with code {}",
+                    // SAFETY: GetLastError is thread-safe and has no documented memory unsafety.
+                    unsafe { GetLastError() },
+                )));
             }
             e => e as usize,
         };
 
         // Don't include the null terminator
         Ok(String::from_utf16(&file_path_buffer[0..buffer_size])
-            .map_err(|e| USimpleError::new(1, e.to_string()))?
+            .map_err(|e| TouchError::WindowsStdoutPathError(e.to_string()))?
             .into())
     }
 }
@@ -602,15 +598,25 @@ mod tests {
         );
         assert_eq!(
             (true, true),
-            determine_atime_mtime_change(&uu_app().try_get_matches_from(vec!["touch", "-a", "-m", "--time", "modify"]).unwrap())
+            determine_atime_mtime_change(
+                &uu_app()
+                    .try_get_matches_from(vec!["touch", "-a", "-m", "--time", "modify"])
+                    .unwrap()
+            )
         );
         assert_eq!(
             (true, false),
-            determine_atime_mtime_change(&uu_app().try_get_matches_from(vec!["touch", "--time", "access"]).unwrap())
+            determine_atime_mtime_change(
+                &uu_app()
+                    .try_get_matches_from(vec!["touch", "--time", "access"])
+                    .unwrap()
+            )
         );
         assert_eq!(
             (false, true),
-            determine_atime_mtime_change(&uu_app().try_get_matches_from(vec!["touch", "-m"]).unwrap())
+            determine_atime_mtime_change(
+                &uu_app().try_get_matches_from(vec!["touch", "-m"]).unwrap()
+            )
         );
     }
 }
