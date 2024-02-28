@@ -28,6 +28,7 @@ pub enum TouchError {
     /// An error getting a path to stdout on Windows
     WindowsStdoutPathError(String),
 
+    /// An error encountered on a specific file
     TouchFileError {
         path: PathBuf,
         index: usize,
@@ -94,6 +95,18 @@ impl TouchFileError {
                 path.quote()
             ),
         }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct FormatFileError(pub PathBuf, pub TouchFileError);
+
+impl Error for FormatFileError {}
+impl UError for FormatFileError {}
+impl Display for FormatFileError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let Self(path, err) = self;
+        err.fmt(f, path)
     }
 }
 
