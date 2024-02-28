@@ -2,6 +2,9 @@
 //
 // For the full copyright and license information, please view the LICENSE
 // file that was distributed with this source code.
+
+// spell-checker:ignore (misc) uioerror
+
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result};
 use std::io::ErrorKind;
