@@ -21,9 +21,9 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use uucore::display::Quotable;
 use uucore::error::{UResult, USimpleError};
-use uucore::{format_usage, help_about, help_usage};
+use uucore::{format_usage, help_about, help_usage, show};
 
-use crate::error::{TouchError, TouchFileError};
+use crate::error::{FormatFileError, TouchError, TouchFileError};
 
 /// Options contains all the possible behaviors and flags for touch.
 ///
@@ -47,6 +47,10 @@ pub struct Options {
     pub date: Option<String>,
 
     pub change_times: ChangeTimes,
+
+    /// When true, error when file doesn't exist and `--no-dereference` was passed
+    /// or the file couldn't be created
+    pub strict: bool,
 }
 
 pub enum InputFile {
@@ -175,6 +179,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         source,
         date,
         change_times: determine_atime_mtime_change(&matches),
+        strict: false,
     };
 
     touch(&files, &opts)?;
@@ -352,11 +357,21 @@ fn touch_helper(
         }
 
         if opts.no_deref {
-            return Err(TouchFileError::TargetFileNotFound);
+            let e = TouchFileError::TargetFileNotFound;
+            if opts.strict {
+                return Err(e);
+            }
+            show!(FormatFileError(path.to_owned(), e));
+            return Ok(());
         }
 
         if let Err(e) = File::create(path) {
-            return Err(TouchFileError::CannotCreate(e));
+            let e = TouchFileError::CannotCreate(e);
+            if opts.strict {
+                return Err(e);
+            }
+            show!(FormatFileError(path.to_owned(), e));
+            return Ok(());
         };
 
         // Minor optimization: if no reference time, timestamp, or date was specified, we're done.
