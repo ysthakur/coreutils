@@ -8,7 +8,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result};
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use filetime::FileTime;
 use uucore::display::Quotable;
@@ -22,10 +22,7 @@ pub enum TouchError {
     /// The reference file's time couldn't be converted to a [chrono::DateTime]
     InvalidFiletime(PathBuf, FileTime),
 
-    /// The reference file could not be found
-    ReferenceFileNotFound(PathBuf),
-
-    /// The reference file's attributes could not be read
+    /// The reference file's attributes could not be found or read
     ReferenceFileInaccessible(PathBuf, ErrorKind),
 
     /// An error getting a path to stdout on Windows
@@ -50,21 +47,13 @@ impl Display for TouchError {
                 time,
                 path.quote()
             ),
-            Self::ReferenceFileNotFound(path) => {
-                write!(f, "Reference file not found: {}", path.quote())
+            Self::ReferenceFileInaccessible(path, kind) => {
+                write!(f, "failed to get attributes of {}: {}", path.quote(), kind)
             }
-            Self::ReferenceFileInaccessible(path, kind) => write!(
-                f,
-                "Attributes of reference file {} couldn't be read: {}",
-                path.quote(),
-                kind
-            ),
             Self::WindowsStdoutPathError(code) => {
                 write!(f, "GetFinalPathNameByHandleW failed with code {}", code)
             }
-            Self::TouchFileError { path, error, .. } => {
-                write!(f, "Error on file {}: {}", path.quote(), error)
-            }
+            Self::TouchFileError { path, error, .. } => error.fmt(f, path),
         }
     }
 }
@@ -82,21 +71,28 @@ pub enum TouchFileError {
     TargetFileNotFound,
 }
 
-impl Error for TouchFileError {}
-impl UError for TouchFileError {}
-impl Display for TouchFileError {
-    fn fmt(&self, f: &mut Formatter) -> Result {
+impl TouchFileError {
+    fn fmt(&self, f: &mut Formatter, path: &Path) -> Result {
         match self {
             Self::CannotCreate(err) => {
-                write!(f, "cannot touch: {}", to_uioerror(err))
+                write!(f, "cannot touch {}: {}", path.quote(), to_uioerror(err))
             }
             Self::CannotReadTimes(err) => {
-                write!(f, "failed to read times: {}", to_uioerror(err))
+                write!(
+                    f,
+                    "failed to get attributes of {}: {}",
+                    path.quote(),
+                    to_uioerror(err)
+                )
             }
             Self::CannotSetTimes(err) => {
-                write!(f, "failed to set times: {}", to_uioerror(err))
+                write!(f, "setting times of {}: {}", path.quote(), to_uioerror(err))
             }
-            Self::TargetFileNotFound => write!(f, "no such file or directory"),
+            Self::TargetFileNotFound => write!(
+                f,
+                "setting times of {}: No such file or directory",
+                path.quote()
+            ),
         }
     }
 }
