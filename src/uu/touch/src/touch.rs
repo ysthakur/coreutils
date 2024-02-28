@@ -412,12 +412,12 @@ fn update_times(
         ChangeTimes::AtimeOnly => (
             atime,
             stat(path, !opts.no_deref)
-                .map_err(|e| TouchFileError::CannotReadTimes(e))?
+                .map_err(TouchFileError::CannotReadTimes)?
                 .1,
         ),
         ChangeTimes::MtimeOnly => (
             stat(path, !opts.no_deref)
-                .map_err(|e| TouchFileError::CannotReadTimes(e))?
+                .map_err(TouchFileError::CannotReadTimes)?
                 .0,
             mtime,
         ),
@@ -435,7 +435,7 @@ fn update_times(
     } else {
         set_file_times(path, atime, mtime)
     }
-    .map_err(|e| TouchFileError::CannotSetTimes(e))
+    .map_err(TouchFileError::CannotSetTimes)
 }
 
 // Get metadata of the provided path
