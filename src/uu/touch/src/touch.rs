@@ -18,7 +18,6 @@ use filetime::{set_file_times, set_symlink_file_times, FileTime};
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use uucore::display::Quotable;
 use uucore::error::{UResult, USimpleError};
@@ -290,11 +289,7 @@ pub fn touch(files: &[InputFile], opts: &Options) -> Result<(), TouchError> {
     let (atime, mtime) = match &opts.source {
         Source::Reference(reference) => {
             let (atime, mtime) = stat(reference, !opts.no_deref).map_err(|e| {
-                if e.kind() == ErrorKind::NotFound {
-                    TouchError::ReferenceFileNotFound(reference.to_owned())
-                } else {
-                    TouchError::ReferenceFileInaccessible(reference.to_owned(), e.kind())
-                }
+                TouchError::ReferenceFileInaccessible(reference.to_owned(), e.kind())
             })?;
 
             let atime = filetime_to_datetime(&atime)
