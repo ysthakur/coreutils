@@ -673,7 +673,7 @@ fn test_touch_system_fails() {
     let file = "/";
     ucmd.args(&[file])
         .fails()
-        .stderr_contains("setting times of '/'");
+        .stderr_contains("Error on file '/': failed to set times");
 }
 
 #[test]
@@ -691,7 +691,7 @@ fn test_touch_no_such_file_error_msg() {
     let path_str = path.to_str().unwrap();
 
     new_ucmd!().arg(&path).fails().stderr_only(format!(
-        "touch: cannot touch '{path_str}': No such file or directory\n"
+        "touch: Error on file '{path_str}': cannot touch: No such file or directory\n"
     ));
 }
 
@@ -733,7 +733,7 @@ fn test_touch_permission_denied_error_msg() {
 
     let full_path = at.plus_as_string(path_str);
     ucmd.arg(&full_path).fails().stderr_only(format!(
-        "touch: cannot touch '{}': Permission denied\n",
+        "touch: Error on file '{}': cannot touch: Permission denied\n",
         &full_path
     ));
 }
@@ -749,12 +749,12 @@ fn test_no_dereference_no_file() {
     new_ucmd!()
         .args(&["-h", "not-a-file"])
         .fails()
-        .stderr_contains("setting times of 'not-a-file': No such file or directory");
+        .stderr_contains("Error on file 'not-a-file': no such file or directory");
     new_ucmd!()
         .args(&["-h", "not-a-file-1", "not-a-file-2"])
         .fails()
-        .stderr_contains("setting times of 'not-a-file-1': No such file or directory")
-        .stderr_contains("setting times of 'not-a-file-2': No such file or directory");
+        .stderr_contains("Error on file 'not-a-file-1': no such file or directory")
+        .stderr_contains("Error on file 'not-a-file-2': no such file or directory");
 }
 
 #[test]
