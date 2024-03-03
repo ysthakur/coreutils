@@ -7,7 +7,6 @@
 
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result};
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use filetime::FileTime;
@@ -23,7 +22,7 @@ pub enum TouchError {
     InvalidFiletime(PathBuf, FileTime),
 
     /// The reference file's attributes could not be found or read
-    ReferenceFileInaccessible(PathBuf, ErrorKind),
+    ReferenceFileInaccessible(PathBuf, std::io::Error),
 
     /// An error getting a path to stdout on Windows
     WindowsStdoutPathError(String),
@@ -48,8 +47,13 @@ impl Display for TouchError {
                 time,
                 path.quote()
             ),
-            Self::ReferenceFileInaccessible(path, kind) => {
-                write!(f, "failed to get attributes of {}: {}", path.quote(), kind)
+            Self::ReferenceFileInaccessible(path, err) => {
+                write!(
+                    f,
+                    "failed to get attributes of {}: {}",
+                    path.quote(),
+                    to_uioerror(err)
+                )
             }
             Self::WindowsStdoutPathError(code) => {
                 write!(f, "GetFinalPathNameByHandleW failed with code {}", code)

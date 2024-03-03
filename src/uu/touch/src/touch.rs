@@ -293,9 +293,8 @@ pub fn uu_app() -> Command {
 pub fn touch(files: &[InputFile], opts: &Options) -> Result<(), TouchError> {
     let (atime, mtime) = match &opts.source {
         Source::Reference(reference) => {
-            let (atime, mtime) = stat(reference, !opts.no_deref).map_err(|e| {
-                TouchError::ReferenceFileInaccessible(reference.to_owned(), e.kind())
-            })?;
+            let (atime, mtime) = stat(reference, !opts.no_deref)
+                .map_err(|e| TouchError::ReferenceFileInaccessible(reference.to_owned(), e))?;
 
             let atime = filetime_to_datetime(&atime)
                 .ok_or_else(|| TouchError::InvalidFiletime(reference.to_owned(), atime))?;
