@@ -121,7 +121,7 @@ mod format {
 ///
 /// The DateTime is converted into a unix timestamp from which the FileTime is
 /// constructed.
-pub fn datetime_to_filetime<T: TimeZone>(dt: &DateTime<T>) -> FileTime {
+fn datetime_to_filetime<T: TimeZone>(dt: &DateTime<T>) -> FileTime {
     FileTime::from_unix_time(dt.timestamp(), dt.timestamp_subsec_nanos())
 }
 
