@@ -17,7 +17,6 @@ use uucore::error::{UError, UIoError};
 pub enum TouchError {
     InvalidDateFormat(String),
 
-    // TODO this doesn't say whether it was the access time or modification time that was invalid
     /// The reference file's time couldn't be converted to a [chrono::DateTime]
     InvalidFiletime(PathBuf, FileTime),
 

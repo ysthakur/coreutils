@@ -287,9 +287,9 @@ pub fn uu_app() -> Command {
 ///
 /// # Errors
 ///
-/// If the user doesn't have permission to access the file, or if one of the directory
-/// components of the file path doesn't exist. The first item of the tuple is the index
-/// of the file that caused the error.
+/// Possible causes:
+/// - The user doesn't have permission to access the file
+/// - One of the directory components of the file path doesn't exist.
 pub fn touch(files: &[InputFile], opts: &Options) -> Result<(), TouchError> {
     let (atime, mtime) = match &opts.source {
         Source::Reference(reference) => {
@@ -382,11 +382,10 @@ fn touch_helper(
     update_times(path, is_stdout, opts, atime, mtime)
 }
 
-/// Returns whether atime and mtime are to be changed.
-/// Note: If none of `-a`, `-m`, and `--time` are passed, the result is `(true, true)`, not `(false, false)`
+/// Returns which of the times (access, modification) are to be changed.
 fn determine_atime_mtime_change(matches: &ArgMatches) -> ChangeTimes {
     // If `--time` is given, Some(true) if equivalent to `-a`, Some(false) if equivalent to `-m`
-    // If `--time` not given, Nones
+    // If `--time` not given, None
     let time_access_only = if matches.contains_id(options::TIME) {
         matches
             .get_one::<String>(options::TIME)
