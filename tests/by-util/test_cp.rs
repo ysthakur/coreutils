@@ -3781,7 +3781,7 @@ fn test_acl_preserve() {
     // calling the command directly. xattr requires some dev packages to be installed
     // and it adds a complex dependency just for a test
     match Command::new("setfacl")
-        .args(["-m", "group::rwx", &path1])
+        .args(["-m", "group::rwx", path1])
         .status()
         .map(|status| status.code())
     {
@@ -3799,4 +3799,59 @@ fn test_acl_preserve() {
     scene.ucmd().args(&["-p", &path, path2]).succeeds();
 
     assert!(compare_xattrs(&file, &file_target));
+}
+
+#[test]
+fn test_cp_force_remove_destination_attributes_only_with_symlink() {
+    let scene = TestScenario::new(util_name!());
+    let at = &scene.fixtures;
+
+    at.write("file1", "1");
+    at.write("file2", "2");
+    at.symlink_file("file1", "sym1");
+
+    scene
+        .ucmd()
+        .args(&[
+            "-a",
+            "--remove-destination",
+            "--attributes-only",
+            "sym1",
+            "file2",
+        ])
+        .succeeds();
+
+    assert!(
+        at.symlink_exists("file2"),
+        "file2 is not a symbolic link as expected"
+    );
+
+    assert_eq!(
+        at.read("file1"),
+        at.read("file2"),
+        "Contents of file1 and file2 do not match"
+    );
+}
+
+#[test]
+fn test_cp_no_dereference_attributes_only_with_symlink() {
+    let scene = TestScenario::new(util_name!());
+    let at = &scene.fixtures;
+    at.write("file1", "1");
+    at.write("file2", "2");
+    at.write("file2.exp", "2");
+    at.symlink_file("file1", "sym1");
+
+    let result = scene
+        .ucmd()
+        .args(&["--no-dereference", "--attributes-only", "sym1", "file2"])
+        .fails();
+
+    assert_eq!(result.code(), 1, "cp command did not fail");
+
+    assert_eq!(
+        at.read("file2"),
+        at.read("file2.exp"),
+        "file2 content does not match expected"
+    );
 }
