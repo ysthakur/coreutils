@@ -2,7 +2,7 @@
 # `build-gnu.bash` ~ builds GNU coreutils (from supplied sources)
 #
 
-# spell-checker:ignore (paths) abmon deref discrim eacces getlimits getopt ginstall inacc infloop inotify reflink ; (misc) INT_OFLOW OFLOW baddecode submodules ; (vars/env) SRCDIR vdir rcexp xpart dired OSTYPE ; (utils) gnproc greadlink gsed
+# spell-checker:ignore (paths) abmon deref discrim eacces getlimits getopt ginstall inacc infloop inotify reflink ; (misc) INT_OFLOW OFLOW baddecode submodules xstrtol ; (vars/env) SRCDIR vdir rcexp xpart dired OSTYPE ; (utils) gnproc greadlink gsed
 
 set -e
 
@@ -100,9 +100,9 @@ cp "${UU_BUILD_DIR}/install" "${UU_BUILD_DIR}/ginstall" # The GNU tests rename t
 # Create *sum binaries
 for sum in b2sum b3sum md5sum sha1sum sha224sum sha256sum sha384sum sha512sum; do
     sum_path="${UU_BUILD_DIR}/${sum}"
-    test -f "${sum_path}" || cp "${UU_BUILD_DIR}/hashsum" "${sum_path}"
+    test -f "${sum_path}" || (cd ${UU_BUILD_DIR} && ln -s "hashsum" "${sum}")
 done
-test -f "${UU_BUILD_DIR}/[" || cp "${UU_BUILD_DIR}/test" "${UU_BUILD_DIR}/["
+test -f "${UU_BUILD_DIR}/[" || (cd ${UU_BUILD_DIR} && ln -s "test" "[")
 
 ##
 
@@ -221,6 +221,8 @@ grep -rlE '/usr/local/bin/\s?/usr/local/bin' init.cfg tests/* | xargs -r sed -Ei
 # we should not regress our project just to match what GNU is going.
 # So, do some changes on the fly
 
+patch -N -r - -d "$path_GNU" -p 1 -i "`realpath \"$path_UUTILS/util/gnu-patches/tests_env_env-S.pl.patch\"`" || true
+
 sed -i -e "s|rm: cannot remove 'e/slink'|rm: cannot remove 'e'|g" tests/rm/fail-eacces.sh
 
 sed -i -e "s|rm: cannot remove 'a/b'|rm: cannot remove 'a'|g" tests/rm/fail-2eperm.sh
@@ -248,6 +250,11 @@ test -f "${UU_BUILD_DIR}/getlimits" || cp src/getlimits "${UU_BUILD_DIR}"
 # pr produces very long log and this command isn't super interesting
 # SKIP for now
 sed -i -e "s|my \$prog = 'pr';$|my \$prog = 'pr';CuSkip::skip \"\$prog: SKIP for producing too long logs\";|" tests/pr/pr-tests.pl
+
+# We don't have the same error message and no need to be that specific
+sed -i -e "s|invalid suffix in --pages argument|invalid --pages argument|" \
+    -e "s|--pages argument '\$too_big' too large|invalid --pages argument '\$too_big'|"  \
+    -e "s|invalid page range|invalid --pages argument|" tests/misc/xstrtol.pl
 
 # When decoding an invalid base32/64 string, gnu writes everything it was able to decode until
 # it hit the decode error, while we don't write anything if the input is invalid.
@@ -313,6 +320,7 @@ sed -i -e "s/du: invalid -t argument/du: invalid --threshold argument/" -e "s/du
 # Remove the extra output check
 sed -i -e "s|Try '\$prog --help' for more information.\\\n||" tests/du/files0-from.pl
 sed -i -e "s|when reading file names from stdin, no file name of\"|-: No such file or directory\n\"|" -e "s| '-' allowed\\\n||" tests/du/files0-from.pl
+sed -i -e "s|-: No such file or directory|cannot access '-': No such file or directory|g" tests/du/files0-from.pl
 
 awk 'BEGIN {count=0} /compare exp out2/ && count < 6 {sub(/compare exp out2/, "grep -q \"cannot be used with\" out2"); count++} 1' tests/df/df-output.sh > tests/df/df-output.sh.tmp && mv tests/df/df-output.sh.tmp tests/df/df-output.sh
 
@@ -328,6 +336,9 @@ ls: invalid --time-style argument 'XX'\nPossible values are: [\"full-iso\", \"lo
 # "hostid BEFORE --help" doesn't fail for GNU. we fail. we are probably doing better
 # "hostid BEFORE --help AFTER " same for this
 sed -i -e "s/env \$prog \$BEFORE \$opt > out2/env \$prog \$BEFORE \$opt > out2 #/" -e "s/env \$prog \$BEFORE \$opt AFTER > out3/env \$prog \$BEFORE \$opt AFTER > out3 #/" -e "s/compare exp out2/compare exp out2 #/" -e "s/compare exp out3/compare exp out3 #/" tests/help/help-version-getopt.sh
+
+# The case doesn't really matter here
+sed -i -e "s|WARNING: 1 line is improperly formatted|warning: 1 line is improperly formatted|" tests/cksum/md5sum-bsd.sh
 
 # Add debug info + we have less syscall then GNU's. Adjust our check.
 # Use GNU sed for /c command
