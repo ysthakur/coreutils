@@ -17,8 +17,8 @@ use uucore::error::{UError, UIoError};
 pub enum TouchError {
     InvalidDateFormat(String),
 
-    /// The reference file's time couldn't be converted to a [chrono::DateTime]
-    InvalidFiletime(PathBuf, FileTime),
+    /// The source time couldn't be converted to a [chrono::DateTime]
+    InvalidFiletime(FileTime),
 
     /// The reference file's attributes could not be found or read
     ReferenceFileInaccessible(PathBuf, std::io::Error),
@@ -40,11 +40,10 @@ impl Display for TouchError {
     fn fmt(&self, f: &mut Formatter) -> Result {
         match self {
             Self::InvalidDateFormat(s) => write!(f, "Unable to parse date: {}", s),
-            Self::InvalidFiletime(path, time) => write!(
+            Self::InvalidFiletime(time) => write!(
                 f,
-                "Invalid access or modification time ({}) for reference file {}",
+                "Source has invalid access or modification time: {}",
                 time,
-                path.quote()
             ),
             Self::ReferenceFileInaccessible(path, err) => {
                 write!(

@@ -72,7 +72,7 @@ pub enum ChangeTimes {
 pub enum Source {
     /// Use access/modification times of given file
     Reference(PathBuf),
-    Timestamp(DateTime<Local>),
+    Timestamp(FileTime),
     /// Use current time
     Now,
 }
@@ -161,10 +161,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let source = if let Some(reference) = reference {
         Source::Reference(PathBuf::from(reference))
     } else if let Some(ts) = timestamp {
-        Source::Timestamp(
-            filetime_to_datetime(&parse_timestamp(ts)?)
-                .ok_or(USimpleError::new(1, format!("Invalid timestamp: {}", ts)))?,
-        )
+        Source::Timestamp(parse_timestamp(ts)?)
     } else {
         Source::Now
     };
@@ -296,24 +293,28 @@ pub fn touch(files: &[InputFile], opts: &Options) -> Result<(), TouchError> {
             let (atime, mtime) = stat(reference, !opts.no_deref)
                 .map_err(|e| TouchError::ReferenceFileInaccessible(reference.to_owned(), e))?;
 
-            let atime = filetime_to_datetime(&atime)
-                .ok_or_else(|| TouchError::InvalidFiletime(reference.to_owned(), atime))?;
-            let mtime = filetime_to_datetime(&mtime)
-                .ok_or_else(|| TouchError::InvalidFiletime(reference.to_owned(), mtime))?;
-
             (atime, mtime)
         }
         Source::Now => {
-            let now = Local::now();
+            let now = datetime_to_filetime(&Local::now());
             (now, now)
         }
         &Source::Timestamp(ts) => (ts, ts),
     };
 
     let (atime, mtime) = if let Some(date) = &opts.date {
-        (parse_date(atime, date)?, parse_date(mtime, date)?)
+        (
+            parse_date(
+                filetime_to_datetime(&atime).ok_or_else(|| TouchError::InvalidFiletime(atime))?,
+                date,
+            )?,
+            parse_date(
+                filetime_to_datetime(&mtime).ok_or_else(|| TouchError::InvalidFiletime(mtime))?,
+                date,
+            )?,
+        )
     } else {
-        (datetime_to_filetime(&atime), datetime_to_filetime(&mtime))
+        (atime, mtime)
     };
 
     for (ind, file) in files.iter().enumerate() {
@@ -645,7 +646,12 @@ fn pathbuf_from_stdout() -> Result<PathBuf, TouchError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{determine_atime_mtime_change, uu_app, ChangeTimes};
+    use filetime::FileTime;
+
+    use crate::{
+        determine_atime_mtime_change, error::TouchError, touch, uu_app, ChangeTimes, Options,
+        Source,
+    };
 
     #[cfg(windows)]
     #[test]
@@ -686,5 +692,25 @@ mod tests {
                 &uu_app().try_get_matches_from(vec!["touch", "-m"]).unwrap()
             )
         );
+    }
+
+    #[test]
+    fn test_invalid_filetime() {
+        let invalid_filetime = FileTime::from_unix_time(0, 1_111_111_111);
+        match touch(
+            &[],
+            &Options {
+                no_create: false,
+                no_deref: false,
+                source: Source::Timestamp(invalid_filetime),
+                date: Some("yesterday".to_owned()),
+                change_times: ChangeTimes::Both,
+                strict: false,
+            },
+        ) {
+            Err(TouchError::InvalidFiletime(filetime)) => assert_eq!(filetime, invalid_filetime),
+            Err(e) => panic!("Expected TouchError::InvalidFiletime, got {}", e),
+            Ok(_) => panic!("Expected to error with TouchError::InvalidFiletime but succeeded"),
+        };
     }
 }
