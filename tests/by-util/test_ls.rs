@@ -45,8 +45,86 @@ const COMMA_ARGS: &[&str] = &["-m", "--format=commas", "--for=commas"];
 const COLUMN_ARGS: &[&str] = &["-C", "--format=columns", "--for=columns"];
 
 #[test]
+fn test_invalid_flag() {
+    new_ucmd!()
+        .arg("--invalid-argument")
+        .fails()
+        .no_stdout()
+        .code_is(2);
+}
+
+#[test]
+fn test_invalid_value_returns_1() {
+    // Invalid values to flags *sometimes* result in error code 1:
+    for flag in [
+        "--classify",
+        "--color",
+        "--format",
+        "--hyperlink",
+        "--indicator-style",
+        "--quoting-style",
+        "--sort",
+        "--time",
+    ] {
+        new_ucmd!()
+            .arg(&format!("{flag}=definitely_invalid_value"))
+            .fails()
+            .no_stdout()
+            .code_is(1);
+    }
+}
+
+#[test]
+fn test_invalid_value_returns_2() {
+    // Invalid values to flags *sometimes* result in error code 2:
+    for flag in ["--block-size", "--width", "--tab-size"] {
+        new_ucmd!()
+            .arg(&format!("{flag}=definitely_invalid_value"))
+            .fails()
+            .no_stdout()
+            .code_is(2);
+    }
+}
+
+#[test]
+fn test_invalid_value_time_style() {
+    // This is the only flag which does not raise an error if it is invalid but not actually used:
+    new_ucmd!()
+        .arg("--time-style=definitely_invalid_value")
+        .succeeds()
+        .no_stderr()
+        .code_is(0);
+    // If it is used, error:
+    new_ucmd!()
+        .arg("-g")
+        .arg("--time-style=definitely_invalid_value")
+        .fails()
+        .no_stdout()
+        .code_is(2);
+    // If it only looks temporarily like it might be used, no error:
+    new_ucmd!()
+        .arg("-l")
+        .arg("--time-style=definitely_invalid_value")
+        .arg("--format=single-column")
+        .succeeds()
+        .no_stderr()
+        .code_is(0);
+}
+
+#[test]
 fn test_ls_ls() {
     new_ucmd!().succeeds();
+}
+
+#[test]
+fn test_ls_help() {
+    // Because we have to work around a lot of clap's error handling and
+    // modify the exit-code, this is actually non-trivial.
+    new_ucmd!()
+        .arg("--help")
+        .succeeds()
+        .stdout_contains("--version")
+        .no_stderr();
 }
 
 #[test]
@@ -73,6 +151,21 @@ fn test_ls_ordering() {
         .stdout_matches(&Regex::new("some-dir1:\\ntotal 0").unwrap());
 }
 
+#[cfg(all(unix, feature = "df", not(target_os = "freebsd")))]
+fn get_filesystem_type(scene: &TestScenario, path: &Path) -> String {
+    let mut cmd = scene.ccmd("df");
+    cmd.args(&["-PT"]).arg(path);
+    let output = cmd.succeeds();
+    let stdout_str = String::from_utf8_lossy(output.stdout());
+    println!("output of stat call ({:?}):\n{}", cmd, stdout_str);
+    let regex_str = r#"Filesystem\s+Type\s+.+[\r\n]+([^\s]+)\s+(?<fstype>[^\s]+)\s+"#;
+    let regex = Regex::new(regex_str).unwrap();
+    let m = regex.captures(&stdout_str).unwrap();
+    let fstype = m["fstype"].to_owned();
+    println!("detected fstype: {}", fstype);
+    fstype
+}
+
 #[cfg(all(feature = "truncate", feature = "dd"))]
 #[test] // FIXME: fix this test for FreeBSD
 fn test_ls_allocation_size() {
@@ -81,7 +174,7 @@ fn test_ls_allocation_size() {
     at.mkdir("some-dir1");
     at.touch("some-dir1/empty-file");
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "df"))]
     {
         scene
             .ccmd("truncate")
@@ -116,12 +209,23 @@ fn test_ls_allocation_size() {
             .stdout_matches(&Regex::new("[^ ] 2 [^ ]").unwrap());
 
         #[cfg(not(target_os = "freebsd"))]
+        let (zero_file_size_4k, zero_file_size_1k, zero_file_size_8k, zero_file_size_4m) =
+            match get_filesystem_type(&scene, &scene.fixtures.subdir).as_str() {
+                // apparently f2fs (flash friendly fs) accepts small overhead for better performance
+                "f2fs" => (4100, 1025, 8200, "4.1M"),
+                _ => (4096, 1024, 8192, "4.0M"),
+            };
+
+        #[cfg(not(target_os = "freebsd"))]
         scene
             .ucmd()
             .arg("-s1")
             .arg("some-dir1")
             .succeeds()
-            .stdout_is("total 4096\n   0 empty-file\n   0 file-with-holes\n4096 zero-file\n");
+            .stdout_is(format!(
+                "total {zero_file_size_4k}\n   0 empty-file\n   0 file-with-holes\n\
+                {zero_file_size_4k} zero-file\n"
+            ));
 
         scene
             .ucmd()
@@ -138,7 +242,7 @@ fn test_ls_allocation_size() {
             .arg("some-dir1")
             .succeeds()
             .stdout_contains("0 empty-file")
-            .stdout_contains("4096 zero-file");
+            .stdout_contains(format!("{zero_file_size_4k} zero-file"));
 
         // Test alignment of different block sized files
         let res = scene.ucmd().arg("-si1").arg("some-dir1").succeeds();
@@ -185,10 +289,10 @@ fn test_ls_allocation_size() {
             .arg("-s1")
             .arg("some-dir1")
             .succeeds()
-            .stdout_contains("total 1024")
+            .stdout_contains(format!("total {zero_file_size_1k}"))
             .stdout_contains("0 empty-file")
             .stdout_contains("0 file-with-holes")
-            .stdout_contains("1024 zero-file");
+            .stdout_contains(format!("{zero_file_size_1k} zero-file"));
 
         #[cfg(not(target_os = "freebsd"))]
         scene
@@ -210,10 +314,10 @@ fn test_ls_allocation_size() {
             .arg("-s1")
             .arg("some-dir1")
             .succeeds()
-            .stdout_contains("total 1024")
+            .stdout_contains(format!("total {zero_file_size_1k}"))
             .stdout_contains("0 empty-file")
             .stdout_contains("0 file-with-holes")
-            .stdout_contains("1024 zero-file");
+            .stdout_contains(format!("{zero_file_size_1k} zero-file"));
 
         #[cfg(not(target_os = "freebsd"))]
         scene
@@ -222,10 +326,10 @@ fn test_ls_allocation_size() {
             .arg("-s1")
             .arg("some-dir1")
             .succeeds()
-            .stdout_contains("total 8192")
+            .stdout_contains(format!("total {zero_file_size_8k}"))
             .stdout_contains("0 empty-file")
             .stdout_contains("0 file-with-holes")
-            .stdout_contains("8192 zero-file");
+            .stdout_contains(format!("{zero_file_size_8k} zero-file"));
 
         // -k should make 'ls' ignore the env var
         #[cfg(not(target_os = "freebsd"))]
@@ -235,10 +339,10 @@ fn test_ls_allocation_size() {
             .arg("-s1k")
             .arg("some-dir1")
             .succeeds()
-            .stdout_contains("total 4096")
+            .stdout_contains(format!("total {zero_file_size_4k}"))
             .stdout_contains("0 empty-file")
             .stdout_contains("0 file-with-holes")
-            .stdout_contains("4096 zero-file");
+            .stdout_contains(format!("{zero_file_size_4k} zero-file"));
 
         // but manually specified blocksize overrides -k
         #[cfg(not(target_os = "freebsd"))]
@@ -248,10 +352,10 @@ fn test_ls_allocation_size() {
             .arg("--block-size=4K")
             .arg("some-dir1")
             .succeeds()
-            .stdout_contains("total 1024")
+            .stdout_contains(format!("total {zero_file_size_1k}"))
             .stdout_contains("0 empty-file")
             .stdout_contains("0 file-with-holes")
-            .stdout_contains("1024 zero-file");
+            .stdout_contains(format!("{zero_file_size_1k} zero-file"));
 
         #[cfg(not(target_os = "freebsd"))]
         scene
@@ -260,10 +364,10 @@ fn test_ls_allocation_size() {
             .arg("--block-size=4K")
             .arg("some-dir1")
             .succeeds()
-            .stdout_contains("total 1024")
+            .stdout_contains(format!("total {zero_file_size_1k}"))
             .stdout_contains("0 empty-file")
             .stdout_contains("0 file-with-holes")
-            .stdout_contains("1024 zero-file");
+            .stdout_contains(format!("{zero_file_size_1k} zero-file"));
 
         // si option should always trump the human-readable option
         #[cfg(not(target_os = "freebsd"))]
@@ -285,10 +389,10 @@ fn test_ls_allocation_size() {
             .arg("--block-size=human-readable")
             .arg("some-dir1")
             .succeeds()
-            .stdout_contains("total 4.0M")
+            .stdout_contains(format!("total {zero_file_size_4m}"))
             .stdout_contains("0 empty-file")
             .stdout_contains("0 file-with-holes")
-            .stdout_contains("4.0M zero-file");
+            .stdout_contains(format!("{zero_file_size_4m} zero-file"));
 
         #[cfg(not(target_os = "freebsd"))]
         scene

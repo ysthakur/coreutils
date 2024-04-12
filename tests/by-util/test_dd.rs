@@ -396,7 +396,7 @@ fn test_null_stats() {
         .arg("if=null.txt")
         .run()
         .stderr_contains("0+0 records in\n0+0 records out\n0 bytes copied, ")
-        .stderr_matches(&Regex::new(r"\d\.\d+(e-\d\d)? s, ").unwrap())
+        .stderr_matches(&Regex::new(r"\d(\.\d+)?(e-\d\d)? s, ").unwrap())
         .stderr_contains("0.0 B/s")
         .success();
 }
@@ -1641,7 +1641,7 @@ fn test_seek_past_dev() {
 fn test_reading_partial_blocks_from_fifo() {
     // Create the FIFO.
     let ts = TestScenario::new(util_name!());
-    let at = ts.fixtures.clone();
+    let at = &ts.fixtures;
     at.mkfifo("fifo");
     let fifoname = at.plus_as_string("fifo");
 
@@ -1682,7 +1682,7 @@ fn test_reading_partial_blocks_from_fifo() {
 fn test_reading_partial_blocks_from_fifo_unbuffered() {
     // Create the FIFO.
     let ts = TestScenario::new(util_name!());
-    let at = ts.fixtures.clone();
+    let at = ts.fixtures;
     at.mkfifo("fifo");
     let fifoname = at.plus_as_string("fifo");
 

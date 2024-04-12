@@ -379,13 +379,15 @@ fn test_base64_raw_conflicts() {
 #[test]
 fn test_base64_single_file() {
     for algo in ALGOS {
-        new_ucmd!()
-            .arg("--base64")
-            .arg("lorem_ipsum.txt")
-            .arg(format!("--algorithm={algo}"))
-            .succeeds()
-            .no_stderr()
-            .stdout_is_fixture_bytes(format!("base64/{algo}_single_file.expected"));
+        for base64_option in ["--base64", "-b"] {
+            new_ucmd!()
+                .arg(base64_option)
+                .arg("lorem_ipsum.txt")
+                .arg(format!("--algorithm={algo}"))
+                .succeeds()
+                .no_stderr()
+                .stdout_is_fixture_bytes(format!("base64/{algo}_single_file.expected"));
+        }
     }
 }
 #[test]
@@ -397,7 +399,7 @@ fn test_base64_multiple_files() {
         .arg("alice_in_wonderland.txt")
         .succeeds()
         .no_stderr()
-        .stdout_is_fixture_bytes(format!("base64/md5_multiple_files.expected"));
+        .stdout_is_fixture_bytes("base64/md5_multiple_files.expected");
 }
 
 #[test]
