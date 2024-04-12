@@ -7,7 +7,7 @@
 
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use filetime::FileTime;
 use uucore::display::Quotable;
@@ -30,7 +30,7 @@ pub enum TouchError {
     TouchFileError {
         path: PathBuf,
         index: usize,
-        error: TouchFileError,
+        error: Box<dyn UError>,
     },
 }
 
@@ -56,59 +56,8 @@ impl Display for TouchError {
             Self::WindowsStdoutPathError(code) => {
                 write!(f, "GetFinalPathNameByHandleW failed with code {}", code)
             }
-            Self::TouchFileError { path, error, .. } => error.fmt(f, path),
+            Self::TouchFileError { error, .. } => write!(f, "{}", error),
         }
-    }
-}
-
-/// An error encountered when touching a specific file
-#[derive(Debug)]
-pub enum TouchFileError {
-    CannotCreate(std::io::Error),
-
-    CannotReadTimes(std::io::Error),
-
-    CannotSetTimes(std::io::Error),
-
-    /// The target file could not be found (only applicable with `--no-dereference`)
-    TargetFileNotFound,
-}
-
-impl TouchFileError {
-    fn fmt(&self, f: &mut Formatter, path: &Path) -> Result {
-        match self {
-            Self::CannotCreate(err) => {
-                write!(f, "cannot touch {}: {}", path.quote(), to_uioerror(err))
-            }
-            Self::CannotReadTimes(err) => {
-                write!(
-                    f,
-                    "failed to get attributes of {}: {}",
-                    path.quote(),
-                    to_uioerror(err)
-                )
-            }
-            Self::CannotSetTimes(err) => {
-                write!(f, "setting times of {}: {}", path.quote(), to_uioerror(err))
-            }
-            Self::TargetFileNotFound => write!(
-                f,
-                "setting times of {}: No such file or directory",
-                path.quote()
-            ),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct FormatFileError(pub PathBuf, pub TouchFileError);
-
-impl Error for FormatFileError {}
-impl UError for FormatFileError {}
-impl Display for FormatFileError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        let Self(path, err) = self;
-        err.fmt(f, path)
     }
 }
 

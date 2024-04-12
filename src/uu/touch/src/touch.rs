@@ -20,10 +20,10 @@ use std::ffi::OsString;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use uucore::display::Quotable;
-use uucore::error::{UResult, USimpleError};
+use uucore::error::{FromIo, UResult, USimpleError};
 use uucore::{format_usage, help_about, help_usage, show};
 
-use crate::error::{FormatFileError, TouchError, TouchFileError};
+use crate::error::TouchError;
 
 /// Options contains all the possible behaviors and flags for touch.
 ///
@@ -340,7 +340,13 @@ fn touch_helper(
     opts: &Options,
     atime: FileTime,
     mtime: FileTime,
-) -> Result<(), TouchFileError> {
+) -> UResult<()> {
+    let filename = if is_stdout {
+        String::from("-")
+    } else {
+        path.display().to_string()
+    };
+
     let metadata_result = if opts.no_deref {
         path.symlink_metadata()
     } else {
@@ -349,7 +355,7 @@ fn touch_helper(
 
     if let Err(e) = metadata_result {
         if e.kind() != std::io::ErrorKind::NotFound {
-            return Err(TouchFileError::CannotReadTimes(e));
+            return Err(e.map_err_context(|| format!("setting times of {}", filename.quote())));
         }
 
         if opts.no_create {
@@ -357,20 +363,26 @@ fn touch_helper(
         }
 
         if opts.no_deref {
-            let e = TouchFileError::TargetFileNotFound;
+            let e = USimpleError::new(
+                1,
+                format!(
+                    "setting times of {}: No such file or directory",
+                    filename.quote()
+                ),
+            );
             if opts.strict {
                 return Err(e);
             }
-            show!(FormatFileError(path.to_owned(), e));
+            show!(e);
             return Ok(());
         }
 
         if let Err(e) = File::create(path) {
-            let e = TouchFileError::CannotCreate(e);
+            let e = e.map_err_context(|| format!("cannot touch {}", path.quote()));
             if opts.strict {
                 return Err(e);
             }
-            show!(FormatFileError(path.to_owned(), e));
+            show!(e);
             return Ok(());
         };
 
@@ -415,18 +427,18 @@ fn update_times(
     opts: &Options,
     atime: FileTime,
     mtime: FileTime,
-) -> Result<(), TouchFileError> {
+) -> UResult<()> {
     // If changing "only" atime or mtime, grab the existing value of the other.
     let (atime, mtime) = match opts.change_times {
         ChangeTimes::AtimeOnly => (
             atime,
             stat(path, !opts.no_deref)
-                .map_err(TouchFileError::CannotReadTimes)?
+                .map_err_context(|| format!("failed to get attributes of {}", path.quote()))?
                 .1,
         ),
         ChangeTimes::MtimeOnly => (
             stat(path, !opts.no_deref)
-                .map_err(TouchFileError::CannotReadTimes)?
+                .map_err_context(|| format!("failed to get attributes of {}", path.quote()))?
                 .0,
             mtime,
         ),
@@ -444,7 +456,7 @@ fn update_times(
     } else {
         set_file_times(path, atime, mtime)
     }
-    .map_err(TouchFileError::CannotSetTimes)
+    .map_err_context(|| format!("setting times of {}", path.quote()))
 }
 
 // Get metadata of the provided path
