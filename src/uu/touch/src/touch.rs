@@ -12,7 +12,7 @@ use chrono::{
     DateTime, Datelike, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime,
     TimeZone, Timelike,
 };
-use clap::builder::ValueParser;
+use clap::builder::{PossibleValue, ValueParser};
 use clap::{crate_version, Arg, ArgAction, ArgGroup, ArgMatches, Command};
 use filetime::{set_file_times, set_symlink_file_times, FileTime};
 use std::borrow::Cow;
@@ -21,6 +21,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use uucore::display::Quotable;
 use uucore::error::{FromIo, UResult, USimpleError};
+use uucore::shortcut_value_parser::ShortcutValueParser;
 use uucore::{format_usage, help_about, help_usage, show};
 
 use crate::error::TouchError;
@@ -260,7 +261,10 @@ pub fn uu_app() -> Command {
                      equivalent to -m",
                 )
                 .value_name("WORD")
-                .value_parser(["access", "atime", "use", "modify", "mtime"]),
+                .value_parser(ShortcutValueParser::new([
+                    PossibleValue::new("atime").alias("access").alias("use"),
+                    PossibleValue::new("mtime").alias("modify"),
+                ])),
         )
         .arg(
             Arg::new(ARG_FILES)

@@ -5,7 +5,7 @@
 
 //! Set of functions to manage file systems
 
-// spell-checker:ignore DATETIME getmntinfo subsecond (arch) bitrig ; (fs) cifs smbfs
+// spell-checker:ignore DATETIME getmntinfo subsecond (fs) cifs smbfs
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const LINUX_MTAB: &str = "/etc/mtab";
@@ -85,7 +85,6 @@ pub use libc::statfs as StatFs;
 #[cfg(any(
     target_os = "aix",
     target_os = "netbsd",
-    target_os = "bitrig",
     target_os = "dragonfly",
     target_os = "illumos",
     target_os = "solaris",
@@ -104,7 +103,6 @@ pub use libc::statfs as statfs_fn;
 #[cfg(any(
     target_os = "aix",
     target_os = "netbsd",
-    target_os = "bitrig",
     target_os = "illumos",
     target_os = "solaris",
     target_os = "dragonfly",
@@ -359,7 +357,7 @@ use libc::c_int;
 ))]
 extern "C" {
     #[cfg(all(target_vendor = "apple", target_arch = "x86_64"))]
-    #[link_name = "getmntinfo$INODE64"] // spell-checker:disable-line
+    #[link_name = "getmntinfo$INODE64"]
     fn get_mount_info(mount_buffer_p: *mut *mut StatFs, flags: c_int) -> c_int;
 
     #[cfg(any(
@@ -367,14 +365,14 @@ extern "C" {
         target_os = "openbsd",
         all(target_vendor = "apple", target_arch = "aarch64")
     ))]
-    #[link_name = "getmntinfo"] // spell-checker:disable-line
+    #[link_name = "getmntinfo"]
     fn get_mount_info(mount_buffer_p: *mut *mut StatFs, flags: c_int) -> c_int;
 
     // Rust on FreeBSD uses 11.x ABI for filesystem metadata syscalls.
     // Call the right version of the symbol for getmntinfo() result to
     // match libc StatFS layout.
     #[cfg(target_os = "freebsd")]
-    #[link_name = "getmntinfo@FBSD_1.0"] // spell-checker:disable-line
+    #[link_name = "getmntinfo@FBSD_1.0"]
     fn get_mount_info(mount_buffer_p: *mut *mut StatFs, flags: c_int) -> c_int;
 }
 
@@ -643,6 +641,7 @@ impl FsMeta for StatFs {
             not(target_os = "aix"),
             not(target_os = "android"),
             not(target_os = "freebsd"),
+            not(target_os = "netbsd"),
             not(target_os = "openbsd"),
             not(target_os = "illumos"),
             not(target_os = "solaris"),
@@ -654,6 +653,7 @@ impl FsMeta for StatFs {
         #[cfg(all(
             not(target_env = "musl"),
             not(target_os = "freebsd"),
+            not(target_os = "netbsd"),
             not(target_os = "redox"),
             any(
                 target_arch = "s390x",
@@ -668,6 +668,7 @@ impl FsMeta for StatFs {
             target_env = "musl",
             target_os = "aix",
             target_os = "freebsd",
+            target_os = "netbsd",
             target_os = "illumos",
             target_os = "solaris",
             target_os = "redox",

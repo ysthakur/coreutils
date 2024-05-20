@@ -104,7 +104,7 @@ fn load_config_file(opts: &mut Options) -> UResult<()> {
 
         for (_, prop) in &conf {
             // ignore all INI section lines (treat them as comments)
-            for (key, value) in prop.iter() {
+            for (key, value) in prop {
                 env::set_var(key, value);
             }
         }
@@ -193,7 +193,7 @@ pub fn uu_app() -> Command {
                 .value_name("a")
                 .action(ArgAction::Set)
                 .value_parser(ValueParser::os_string())
-                .help("Override the zeroth argument passed to the command being executed.\
+                .help("Override the zeroth argument passed to the command being executed. \
                        Without this option a default value of `command` is used.")
         )
         .arg(
@@ -371,7 +371,7 @@ impl EnvAppData {
             // no program provided, so just dump all env vars to stdout
             print_env(opts.line_ending);
         } else {
-            return self.run_program(opts, self.do_debug_printing);
+            return self.run_program(&opts, self.do_debug_printing);
         }
 
         Ok(())
@@ -379,7 +379,7 @@ impl EnvAppData {
 
     fn run_program(
         &mut self,
-        opts: Options<'_>,
+        opts: &Options<'_>,
         do_debug_printing: bool,
     ) -> Result<(), Box<dyn UError>> {
         let prog = Cow::from(opts.program[0]);
@@ -605,4 +605,40 @@ fn apply_specified_env_vars(opts: &Options<'_>) {
 #[uucore::main]
 pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     EnvAppData::default().run_env(args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_string_environment_vars_test() {
+        std::env::set_var("FOO", "BAR");
+        assert_eq!(
+            NCvt::convert(vec!["FOO=bar", "sh", "-c", "echo xBARx =$FOO="]),
+            parse_args_from_str(&NCvt::convert(r#"FOO=bar sh -c "echo x${FOO}x =\$FOO=""#))
+                .unwrap(),
+        );
+    }
+
+    #[test]
+    fn test_split_string_misc() {
+        assert_eq!(
+            NCvt::convert(vec!["A=B", "FOO=AR", "sh", "-c", "echo $A$FOO"]),
+            parse_args_from_str(&NCvt::convert(r#"A=B FOO=AR  sh -c "echo \$A\$FOO""#)).unwrap(),
+        );
+        assert_eq!(
+            NCvt::convert(vec!["A=B", "FOO=AR", "sh", "-c", "echo $A$FOO"]),
+            parse_args_from_str(&NCvt::convert(r#"A=B FOO=AR  sh -c 'echo $A$FOO'"#)).unwrap()
+        );
+        assert_eq!(
+            NCvt::convert(vec!["A=B", "FOO=AR", "sh", "-c", "echo $A$FOO"]),
+            parse_args_from_str(&NCvt::convert(r#"A=B FOO=AR  sh -c 'echo $A$FOO'"#)).unwrap()
+        );
+
+        assert_eq!(
+            NCvt::convert(vec!["-i", "A=B ' C"]),
+            parse_args_from_str(&NCvt::convert(r#"-i A='B \' C'"#)).unwrap()
+        );
+    }
 }
