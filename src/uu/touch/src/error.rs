@@ -11,33 +11,59 @@ use std::path::PathBuf;
 
 use filetime::FileTime;
 use uucore::display::Quotable;
-use uucore::error::{UError, UIoError};
+use uucore::error::UError;
 
+/// An error encountered on a specific file
 #[derive(Debug)]
 pub enum TouchError {
-    InvalidDateFormat(String),
-
-    /// The source time couldn't be converted to a [chrono::DateTime]
-    InvalidFiletime(FileTime),
-
-    /// The reference file's attributes could not be found or read
-    ReferenceFileInaccessible(PathBuf, std::io::Error),
-
     /// An error getting a path to stdout on Windows
     WindowsStdoutPathError(String),
 
-    /// An error encountered on a specific file
-    TouchFileError {
-        path: PathBuf,
-        index: usize,
-        error: Box<dyn UError>,
-    },
+    /// File exists already, but cannot read its metadata
+    CannotGetTimes(Box<dyn UError>),
+
+    /// Cannot set the file's access/modification times
+    CannotSetTimes(Box<dyn UError>),
+
+    /// File didn't exist and `-h`/`--no-dereference` was passed
+    NotFound(Box<dyn UError>),
+
+    /// Could not create the file
+    CannotTouch(Box<dyn UError>),
 }
 
 impl Error for TouchError {}
 impl UError for TouchError {}
 impl Display for TouchError {
     fn fmt(&self, f: &mut Formatter) -> Result {
+        match self {
+            Self::WindowsStdoutPathError(code) => {
+                write!(f, "GetFinalPathNameByHandleW failed with code {}", code)
+            }
+            Self::NotFound(error) => write!(f, "{}", error),
+            Self::CannotTouch(error) => write!(f, "{}", error),
+            Self::CannotGetTimes(error) => write!(f, "{}", error),
+            Self::CannotSetTimes(error) => write!(f, "{}", error),
+        }
+    }
+}
+
+/// An error encountered when determining file access/modification times
+#[derive(Debug)]
+pub enum TimeError {
+    // Date (passed with `--date`) was invalid
+    InvalidDateFormat(String),
+
+    /// The source [`FileTime`] couldn't be converted to a [`chrono::DateTime`]
+    InvalidFiletime(FileTime),
+
+    /// The reference file couldn't be found or its attributes couldn't be read
+    ReferenceFileInaccessible(PathBuf, Box<dyn UError>),
+}
+impl Error for TimeError {}
+impl UError for TimeError {}
+impl Display for TimeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
             Self::InvalidDateFormat(s) => write!(f, "Unable to parse date: {}", s),
             Self::InvalidFiletime(time) => write!(
@@ -46,26 +72,8 @@ impl Display for TouchError {
                 time,
             ),
             Self::ReferenceFileInaccessible(path, err) => {
-                write!(
-                    f,
-                    "failed to get attributes of {}: {}",
-                    path.quote(),
-                    to_uioerror(err)
-                )
+                write!(f, "failed to get attributes of {}: {}", path.quote(), err)
             }
-            Self::WindowsStdoutPathError(code) => {
-                write!(f, "GetFinalPathNameByHandleW failed with code {}", code)
-            }
-            Self::TouchFileError { error, .. } => write!(f, "{}", error),
         }
     }
-}
-
-fn to_uioerror(err: &std::io::Error) -> UIoError {
-    let copy = if let Some(code) = err.raw_os_error() {
-        std::io::Error::from_raw_os_error(code)
-    } else {
-        std::io::Error::from(err.kind())
-    };
-    UIoError::from(copy)
 }
