@@ -416,12 +416,17 @@ fn determine_atime_mtime_change(matches: &ArgMatches) -> ChangeTimes {
     }
 }
 
-/// Determine what access and modification times to use. The returned [`OptsWithTimes`]
-/// object can then be used for touching multiple files, so that all of them have
-/// the same access and/or modification times.
+/// Determine what access and modification times to use.
+///
+/// The returned [`OptsWithTimes`] object can then be used for touching multiple
+/// files, so that all of them have the same access and/or modification times.
 ///
 /// # Errors
 ///
+/// Errors if:
+/// - The reference file (if provided), couldn't be found or its attributes couldn't be read
+/// - `opts.date` (provided with `--date`) was invalid
+/// - If `--date` was given, the access or modification time couldn't be converted to a [`chrono::DateTime`]
 pub fn get_times(opts: &Options) -> Result<OptsWithTimes, TimeError> {
     let (atime, mtime) = match &opts.source {
         Source::Reference(reference) => {
