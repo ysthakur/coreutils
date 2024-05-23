@@ -14,7 +14,6 @@ use chrono::{
 };
 use clap::builder::{PossibleValue, ValueParser};
 use clap::{crate_version, Arg, ArgAction, ArgGroup, ArgMatches, Command};
-use error::TimeError;
 use filetime::{set_file_times, set_symlink_file_times, FileTime};
 use std::borrow::Cow;
 use std::ffi::OsString;
@@ -25,7 +24,7 @@ use uucore::error::{FromIo, UResult, USimpleError};
 use uucore::shortcut_value_parser::ShortcutValueParser;
 use uucore::{format_usage, help_about, help_usage, show};
 
-use crate::error::TouchError;
+use crate::error::{TimeError, TouchError};
 
 /// Options contains all the possible behaviors and flags for touch.
 ///
