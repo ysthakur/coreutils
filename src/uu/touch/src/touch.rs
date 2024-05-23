@@ -6,6 +6,8 @@
 // spell-checker:ignore (ToDO) filetime datetime lpszfilepath mktime DATETIME datelike timelike
 // spell-checker:ignore (FORMATS) MMDDhhmm YYYYMMDDHHMM YYMMDDHHMM YYYYMMDDHHMMS
 
+pub mod error;
+
 use chrono::{
     DateTime, Datelike, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime,
     TimeZone, Timelike,
@@ -13,6 +15,7 @@ use chrono::{
 use clap::builder::{PossibleValue, ValueParser};
 use clap::{crate_version, Arg, ArgAction, ArgGroup, ArgMatches, Command};
 use filetime::{set_file_times, set_symlink_file_times, FileTime};
+use std::borrow::Cow;
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -20,6 +23,73 @@ use uucore::display::Quotable;
 use uucore::error::{FromIo, UResult, USimpleError};
 use uucore::shortcut_value_parser::ShortcutValueParser;
 use uucore::{format_usage, help_about, help_usage, show};
+
+use crate::error::{TimeError, TouchError};
+
+/// Options contains all the possible behaviors and flags for touch.
+///
+/// All options are public so that the options can be programmatically
+/// constructed by other crates, such as nushell. That means that this struct is
+/// part of our public API. It should therefore not be changed without good reason.
+///
+/// The fields are documented with the arguments that determine their value.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Options {
+    /// Do not create any files. Set by `-c`/`--no-create`.
+    pub no_create: bool,
+
+    /// Affect each symbolic link instead of any referenced file. Set by `-h`/`--no-dereference`.
+    pub no_deref: bool,
+
+    /// Where to get access and modification times from
+    pub source: Source,
+
+    /// If given, uses time from `source` but on given date
+    pub date: Option<String>,
+
+    /// Whether to change access time only, modification time only, or both
+    pub change_times: ChangeTimes,
+
+    /// When true, error when file doesn't exist and either `--no-dereference`
+    /// was passed or the file couldn't be created
+    pub strict: bool,
+}
+
+/// [`Options`] along with the specific access and modification times to set files to.
+/// Constructed using [`get_times`]
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct OptsWithTimes {
+    pub(crate) opts: Options,
+    pub(crate) atime: FileTime,
+    pub(crate) mtime: FileTime,
+}
+
+pub enum InputFile {
+    /// A regular file
+    Path(PathBuf),
+    /// Touch stdout. `--no-dereference` will be ignored in this case.
+    Stdout,
+}
+
+/// Whether to set access time only, modification time only, or both
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum ChangeTimes {
+    /// Change only access time
+    AtimeOnly,
+    /// Change only modification time
+    MtimeOnly,
+    /// Change both access and modification times
+    Both,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Source {
+    /// Use access/modification times of given file
+    Reference(PathBuf),
+    Timestamp(FileTime),
+    /// Use current time
+    Now,
+}
 
 const ABOUT: &str = help_about!("touch.md");
 const USAGE: &str = help_usage!("touch.md");
@@ -77,67 +147,64 @@ fn filetime_to_datetime(ft: &FileTime) -> Option<DateTime<Local>> {
 pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let matches = uu_app().try_get_matches_from(args)?;
 
-    let files = matches.get_many::<OsString>(ARG_FILES).ok_or_else(|| {
-        USimpleError::new(
-            1,
-            format!(
-                "missing file operand\nTry '{} --help' for more information.",
-                uucore::execution_phrase()
-            ),
-        )
-    })?;
-
-    let (atime, mtime) = determine_times(&matches)?;
-
-    for filename in files {
-        // FIXME: find a way to avoid having to clone the path
-        let pathbuf = if filename == "-" {
-            pathbuf_from_stdout()?
-        } else {
-            PathBuf::from(filename)
-        };
-
-        let path = pathbuf.as_path();
-
-        let metadata_result = if matches.get_flag(options::NO_DEREF) {
-            path.symlink_metadata()
-        } else {
-            path.metadata()
-        };
-
-        if let Err(e) = metadata_result {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                return Err(e.map_err_context(|| format!("setting times of {}", filename.quote())));
+    let files: Vec<InputFile> = matches
+        .get_many::<OsString>(ARG_FILES)
+        .ok_or_else(|| {
+            USimpleError::new(
+                1,
+                format!(
+                    "missing file operand\nTry '{} --help' for more information.",
+                    uucore::execution_phrase()
+                ),
+            )
+        })?
+        .map(|filename| {
+            if filename == "-" {
+                InputFile::Stdout
+            } else {
+                InputFile::Path(PathBuf::from(filename))
             }
+        })
+        .collect();
 
-            if matches.get_flag(options::NO_CREATE) {
-                continue;
+    let no_deref = matches.get_flag(options::NO_DEREF);
+
+    let reference = matches.get_one::<OsString>(options::sources::REFERENCE);
+    let timestamp = matches.get_one::<String>(options::sources::TIMESTAMP);
+
+    let source = if let Some(reference) = reference {
+        Source::Reference(PathBuf::from(reference))
+    } else if let Some(ts) = timestamp {
+        Source::Timestamp(parse_timestamp(ts)?)
+    } else {
+        Source::Now
+    };
+
+    let date = matches
+        .get_one::<String>(options::sources::DATE)
+        .map(|date| date.to_owned());
+
+    let opts = Options {
+        no_create: matches.get_flag(options::NO_CREATE),
+        no_deref,
+        source,
+        date,
+        change_times: determine_atime_mtime_change(&matches),
+        strict: false,
+    };
+
+    let opts_with_times = get_times(&opts)?;
+
+    for file in files {
+        match touch(&file, &opts_with_times) {
+            Ok(()) => {}
+            Err(TouchError::CannotTouch(err) | TouchError::NotFound(err)) => {
+                show!(err);
             }
-
-            if matches.get_flag(options::NO_DEREF) {
-                show!(USimpleError::new(
-                    1,
-                    format!(
-                        "setting times of {}: No such file or directory",
-                        filename.quote()
-                    )
-                ));
-                continue;
-            }
-
-            if let Err(e) = File::create(path) {
-                show!(e.map_err_context(|| format!("cannot touch {}", path.quote())));
-                continue;
-            };
-
-            // Minor optimization: if no reference time was specified, we're done.
-            if !matches.contains_id(options::SOURCES) {
-                continue;
-            }
+            Err(e) => return Err(Box::new(e)),
         }
-
-        update_times(&matches, path, atime, mtime, filename)?;
     }
+
     Ok(())
 }
 
@@ -240,102 +307,216 @@ pub fn uu_app() -> Command {
         )
 }
 
-// Determine the access and modification time
-fn determine_times(matches: &ArgMatches) -> UResult<(FileTime, FileTime)> {
-    match (
-        matches.get_one::<OsString>(options::sources::REFERENCE),
-        matches.get_one::<String>(options::sources::DATE),
-    ) {
-        (Some(reference), Some(date)) => {
-            let (atime, mtime) = stat(Path::new(&reference), !matches.get_flag(options::NO_DEREF))?;
-            let atime = filetime_to_datetime(&atime).ok_or_else(|| {
-                USimpleError::new(1, "Could not process the reference access time")
-            })?;
-            let mtime = filetime_to_datetime(&mtime).ok_or_else(|| {
-                USimpleError::new(1, "Could not process the reference modification time")
-            })?;
-            Ok((parse_date(atime, date)?, parse_date(mtime, date)?))
+/// Execute the touch command.
+///
+/// # Errors
+///
+/// Possible causes:
+/// - The user doesn't have permission to access the file
+/// - One of the directory components of the file path doesn't exist.
+///
+/// It will return an `Err` on the first error. However, for any of the files,
+/// if all of the following are true, it will print the error and continue touching
+/// the rest of the files.
+/// - `opts.strict` is `false`
+/// - The file doesn't already exist
+/// - `-c`/`--no-create` was passed (`opts.no_create`)
+/// - Either `-h`/`--no-dereference` was passed (`opts.no_deref`) or the file couldn't be created
+pub fn touch(file: &InputFile, opts_with_times: &OptsWithTimes) -> Result<(), TouchError> {
+    let opts = &opts_with_times.opts;
+
+    let (path, is_stdout) = match file {
+        InputFile::Stdout => (Cow::Owned(pathbuf_from_stdout()?), true),
+        InputFile::Path(path) => (Cow::Borrowed(path), false),
+    };
+
+    let path = path.as_path();
+
+    let filename = if is_stdout {
+        String::from("-")
+    } else {
+        path.display().to_string()
+    };
+
+    let metadata_result = if opts.no_deref {
+        path.symlink_metadata()
+    } else {
+        path.metadata()
+    };
+
+    if let Err(e) = metadata_result {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(TouchError::CannotGetTimes(e.map_err_context(|| {
+                format!("setting times of {}", filename.quote())
+            })));
         }
-        (Some(reference), None) => {
-            stat(Path::new(&reference), !matches.get_flag(options::NO_DEREF))
+
+        if opts.no_create {
+            return Ok(());
         }
-        (None, Some(date)) => {
-            let timestamp = parse_date(Local::now(), date)?;
-            Ok((timestamp, timestamp))
+
+        if opts.no_deref {
+            return Err(TouchError::NotFound(USimpleError::new(
+                1,
+                format!(
+                    "setting times of {}: No such file or directory",
+                    filename.quote()
+                ),
+            )));
         }
-        (None, None) => {
-            let timestamp = if let Some(ts) = matches.get_one::<String>(options::sources::TIMESTAMP)
-            {
-                parse_timestamp(ts)?
-            } else {
-                datetime_to_filetime(&Local::now())
-            };
-            Ok((timestamp, timestamp))
+
+        if let Err(e) = File::create(path) {
+            return Err(TouchError::CannotTouch(
+                e.map_err_context(|| format!("cannot touch {}", path.quote())),
+            ));
+        };
+
+        // Minor optimization: if no reference time, timestamp, or date was specified, we're done.
+        if opts.source == Source::Now && opts.date.is_none() {
+            return Ok(());
         }
+    }
+
+    update_times(
+        path,
+        is_stdout,
+        opts,
+        opts_with_times.atime,
+        opts_with_times.mtime,
+    )
+}
+
+/// Returns which of the times (access, modification) are to be changed.
+///
+/// Note that "-a" and "-m" may be passed together; this is not an xor.
+/// - If `-a` is passed but not `-m`, only access time is changed
+/// - If `-m` is passed but not `-a`, only modification time is changed
+/// - If neither or both are passed, both times are changed
+fn determine_atime_mtime_change(matches: &ArgMatches) -> ChangeTimes {
+    // If `--time` is given, Some(true) if equivalent to `-a`, Some(false) if equivalent to `-m`
+    // If `--time` not given, None
+    let time_access_only = if matches.contains_id(options::TIME) {
+        matches
+            .get_one::<String>(options::TIME)
+            .map(|time| time.contains("access") || time.contains("atime") || time.contains("use"))
+    } else {
+        None
+    };
+
+    let atime_only = matches.get_flag(options::ACCESS) || time_access_only.unwrap_or_default();
+    let mtime_only = matches.get_flag(options::MODIFICATION) || !time_access_only.unwrap_or(true);
+
+    if atime_only && !mtime_only {
+        ChangeTimes::AtimeOnly
+    } else if mtime_only && !atime_only {
+        ChangeTimes::MtimeOnly
+    } else {
+        ChangeTimes::Both
     }
 }
 
-// Updating file access and modification times based on user-specified options
+/// Determine what access and modification times to use.
+///
+/// The returned [`OptsWithTimes`] object can then be used for touching multiple
+/// files, so that all of them have the same access and/or modification times.
+///
+/// # Errors
+///
+/// Errors if:
+/// - The reference file (if provided), couldn't be found or its attributes couldn't be read
+/// - `opts.date` (provided with `--date`) was invalid
+/// - If `--date` was given, the access or modification time couldn't be converted to a [`chrono::DateTime`]
+pub fn get_times(opts: &Options) -> Result<OptsWithTimes, TimeError> {
+    let (atime, mtime) = match &opts.source {
+        Source::Reference(reference) => {
+            let (atime, mtime) = stat(reference, !opts.no_deref).map_err(|e| {
+                TimeError::ReferenceFileInaccessible(reference.to_owned(), e.into())
+            })?;
+
+            (atime, mtime)
+        }
+        Source::Now => {
+            let now = datetime_to_filetime(&Local::now());
+            (now, now)
+        }
+        &Source::Timestamp(ts) => (ts, ts),
+    };
+
+    let (atime, mtime) = if let Some(date) = &opts.date {
+        (
+            parse_date(
+                filetime_to_datetime(&atime).ok_or_else(|| TimeError::InvalidFiletime(atime))?,
+                date,
+            )?,
+            parse_date(
+                filetime_to_datetime(&mtime).ok_or_else(|| TimeError::InvalidFiletime(mtime))?,
+                date,
+            )?,
+        )
+    } else {
+        (atime, mtime)
+    };
+
+    Ok(OptsWithTimes {
+        opts: opts.clone(),
+        atime,
+        mtime,
+    })
+}
+
+/// Updating file access and modification times based on user-specified options
+///
+/// If the file is not stdout (`!is_stdout`) and `-h`/`--no-dereference` was
+/// passed, then, if the given file is a symlink, its own times will be updated,
+/// rather than the file it points to.
 fn update_times(
-    matches: &ArgMatches,
     path: &Path,
-    mut atime: FileTime,
-    mut mtime: FileTime,
-    filename: &OsString,
-) -> UResult<()> {
+    is_stdout: bool,
+    opts: &Options,
+    atime: FileTime,
+    mtime: FileTime,
+) -> Result<(), TouchError> {
     // If changing "only" atime or mtime, grab the existing value of the other.
-    // Note that "-a" and "-m" may be passed together; this is not an xor.
-    if matches.get_flag(options::ACCESS)
-        || matches.get_flag(options::MODIFICATION)
-        || matches.contains_id(options::TIME)
-    {
-        let st = stat(path, !matches.get_flag(options::NO_DEREF))?;
-        let time = matches
-            .get_one::<String>(options::TIME)
-            .map(|s| s.as_str())
-            .unwrap_or("");
-
-        if !(matches.get_flag(options::ACCESS)
-            || time.contains(&"access".to_owned())
-            || time.contains(&"atime".to_owned())
-            || time.contains(&"use".to_owned()))
-        {
-            atime = st.0;
+    let (atime, mtime) = match opts.change_times {
+        ChangeTimes::Both => (atime, mtime),
+        _ => {
+            let (orig_atime, orig_mtime) = stat(path, !opts.no_deref).map_err(|e| {
+                TouchError::CannotGetTimes(
+                    e.map_err_context(|| format!("failed to get attributes of {}", path.quote())),
+                )
+            })?;
+            if opts.change_times == ChangeTimes::AtimeOnly {
+                (atime, orig_mtime)
+            } else {
+                (orig_atime, mtime)
+            }
         }
-
-        if !(matches.get_flag(options::MODIFICATION)
-            || time.contains(&"modify".to_owned())
-            || time.contains(&"mtime".to_owned()))
-        {
-            mtime = st.1;
-        }
-    }
+    };
 
     // sets the file access and modification times for a file or a symbolic link.
     // The filename, access time (atime), and modification time (mtime) are provided as inputs.
 
-    // If the filename is not "-", indicating a special case for touch -h -,
-    // the code checks if the NO_DEREF flag is set, which means the user wants to
-    // set the times for a symbolic link itself, rather than the file it points to.
-    if filename == "-" {
-        filetime::set_file_times(path, atime, mtime)
-    } else if matches.get_flag(options::NO_DEREF) {
+    if opts.no_deref && !is_stdout {
         set_symlink_file_times(path, atime, mtime)
     } else {
         set_file_times(path, atime, mtime)
     }
-    .map_err_context(|| format!("setting times of {}", path.quote()))
+    .map_err(|e| {
+        TouchError::CannotSetTimes(
+            e.map_err_context(|| format!("setting times of {}", path.quote())),
+        )
+    })
 }
-// Get metadata of the provided path
-// If `follow` is `true`, the function will try to follow symlinks
-// If `follow` is `false` or the symlink is broken, the function will return metadata of the symlink itself
-fn stat(path: &Path, follow: bool) -> UResult<(FileTime, FileTime)> {
+
+/// Get metadata of the provided path
+/// If `follow` is `true`, the function will try to follow symlinks
+/// If `follow` is `false` or the symlink is broken, the function will return metadata of the symlink itself
+fn stat(path: &Path, follow: bool) -> std::io::Result<(FileTime, FileTime)> {
     let metadata = if follow {
         fs::metadata(path).or_else(|_| fs::symlink_metadata(path))
     } else {
         fs::symlink_metadata(path)
-    }
-    .map_err_context(|| format!("failed to get attributes of {}", path.quote()))?;
+    }?;
 
     Ok((
         FileTime::from_last_access_time(&metadata),
@@ -343,7 +524,7 @@ fn stat(path: &Path, follow: bool) -> UResult<(FileTime, FileTime)> {
     ))
 }
 
-fn parse_date(ref_time: DateTime<Local>, s: &str) -> UResult<FileTime> {
+fn parse_date(ref_time: DateTime<Local>, s: &str) -> Result<FileTime, TimeError> {
     // This isn't actually compatible with GNU touch, but there doesn't seem to
     // be any simple specification for what format this parameter allows and I'm
     // not about to implement GNU parse_datetime.
@@ -396,7 +577,7 @@ fn parse_date(ref_time: DateTime<Local>, s: &str) -> UResult<FileTime> {
         return Ok(datetime_to_filetime(&dt));
     }
 
-    Err(USimpleError::new(1, format!("Unable to parse date: {s}")))
+    Err(TimeError::InvalidDateFormat(s.to_owned()))
 }
 
 fn parse_timestamp(s: &str) -> UResult<FileTime> {
@@ -461,7 +642,7 @@ fn parse_timestamp(s: &str) -> UResult<FileTime> {
 ///
 /// On Windows, uses GetFinalPathNameByHandleW to attempt to get the path
 /// from the stdout handle.
-fn pathbuf_from_stdout() -> UResult<PathBuf> {
+fn pathbuf_from_stdout() -> Result<PathBuf, TouchError> {
     #[cfg(all(unix, not(target_os = "android")))]
     {
         Ok(PathBuf::from("/dev/stdout"))
@@ -503,33 +684,36 @@ fn pathbuf_from_stdout() -> UResult<PathBuf> {
 
         let buffer_size = match ret {
             ERROR_PATH_NOT_FOUND | ERROR_NOT_ENOUGH_MEMORY | ERROR_INVALID_PARAMETER => {
-                return Err(USimpleError::new(
-                    1,
-                    format!("GetFinalPathNameByHandleW failed with code {ret}"),
-                ))
+                return Err(TouchError::WindowsStdoutPathError(format!(
+                    "GetFinalPathNameByHandleW failed with code {ret}"
+                )))
             }
             0 => {
-                return Err(USimpleError::new(
-                    1,
-                    format!(
-                        "GetFinalPathNameByHandleW failed with code {}",
-                        // SAFETY: GetLastError is thread-safe and has no documented memory unsafety.
-                        unsafe { GetLastError() }
-                    ),
-                ));
+                return Err(TouchError::WindowsStdoutPathError(format!(
+                    "GetFinalPathNameByHandleW failed with code {}",
+                    // SAFETY: GetLastError is thread-safe and has no documented memory unsafety.
+                    unsafe { GetLastError() },
+                )));
             }
             e => e as usize,
         };
 
         // Don't include the null terminator
         Ok(String::from_utf16(&file_path_buffer[0..buffer_size])
-            .map_err(|e| USimpleError::new(1, e.to_string()))?
+            .map_err(|e| TouchError::WindowsStdoutPathError(e.to_string()))?
             .into())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use filetime::FileTime;
+
+    use crate::{
+        determine_atime_mtime_change, error::TimeError, get_times, uu_app, ChangeTimes, Options,
+        Source,
+    };
+
     #[cfg(windows)]
     #[test]
     fn test_get_pathbuf_from_stdout_fails_if_stdout_is_not_a_file() {
@@ -539,5 +723,52 @@ mod tests {
             .expect_err("pathbuf_from_stdout should have failed")
             .to_string()
             .contains("GetFinalPathNameByHandleW failed with code 1"));
+    }
+
+    #[test]
+    fn test_determine_atime_mtime_change() {
+        assert_eq!(
+            ChangeTimes::Both,
+            determine_atime_mtime_change(&uu_app().try_get_matches_from(vec!["touch"]).unwrap())
+        );
+        assert_eq!(
+            ChangeTimes::Both,
+            determine_atime_mtime_change(
+                &uu_app()
+                    .try_get_matches_from(vec!["touch", "-a", "-m", "--time", "modify"])
+                    .unwrap()
+            )
+        );
+        assert_eq!(
+            ChangeTimes::AtimeOnly,
+            determine_atime_mtime_change(
+                &uu_app()
+                    .try_get_matches_from(vec!["touch", "--time", "access"])
+                    .unwrap()
+            )
+        );
+        assert_eq!(
+            ChangeTimes::MtimeOnly,
+            determine_atime_mtime_change(
+                &uu_app().try_get_matches_from(vec!["touch", "-m"]).unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn test_invalid_filetime() {
+        let invalid_filetime = FileTime::from_unix_time(0, 1_111_111_111);
+        match get_times(&Options {
+            no_create: false,
+            no_deref: false,
+            source: Source::Timestamp(invalid_filetime),
+            date: Some("yesterday".to_owned()),
+            change_times: ChangeTimes::Both,
+            strict: false,
+        }) {
+            Err(TimeError::InvalidFiletime(filetime)) => assert_eq!(filetime, invalid_filetime),
+            Err(e) => panic!("Expected invalid filetime error, got {}", e),
+            Ok(_) => panic!("Expected to error with invalid filetime but succeeded"),
+        };
     }
 }
