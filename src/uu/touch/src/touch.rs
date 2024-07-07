@@ -18,6 +18,7 @@ use filetime::{set_file_times, set_symlink_file_times, FileTime};
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::fs::{self, File};
+use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use uucore::display::Quotable;
 use uucore::error::{FromIo, UResult, USimpleError};
@@ -366,9 +367,25 @@ pub fn touch(file: &InputFile, opts_with_times: &OptsWithTimes) -> Result<(), To
         }
 
         if let Err(e) = File::create(path) {
-            return Err(TouchError::CannotTouch(
-                e.map_err_context(|| format!("cannot touch {}", path.quote())),
-            ));
+            // we need to check if the path is the path to a directory (ends with a separator)
+            // we can't use File::create to create a directory
+            // we cannot use path.is_dir() because it calls fs::metadata which we already called
+            // when stable, we can change to use e.kind() == std::io::ErrorKind::IsADirectory
+            let is_directory = if let Some(last_char) = path.to_string_lossy().chars().last() {
+                last_char == std::path::MAIN_SEPARATOR
+            } else {
+                false
+            };
+            if is_directory {
+                let custom_err = Error::new(ErrorKind::Other, "No such file or directory");
+                return Err(TouchError::CannotTouch(
+                    custom_err.map_err_context(|| format!("cannot touch {}", filename.quote())),
+                ));
+            } else {
+                return Err(TouchError::CannotTouch(
+                    e.map_err_context(|| format!("cannot touch {}", path.quote())),
+                ));
+            }
         };
 
         // Minor optimization: if no reference time, timestamp, or date was specified, we're done.

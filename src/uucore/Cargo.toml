@@ -2,7 +2,7 @@
 
 [package]
 name = "uucore"
-version = "0.0.26"
+version = "0.0.27"
 authors = ["uutils developers"]
 license = "MIT"
 description = "uutils ~ 'core' uutils code library (cross-platform)"
@@ -51,6 +51,7 @@ sha3 = { workspace = true, optional = true }
 blake2b_simd = { workspace = true, optional = true }
 blake3 = { workspace = true, optional = true }
 sm3 = { workspace = true, optional = true }
+regex = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 walkdir = { workspace = true, optional = true }
@@ -75,7 +76,7 @@ default = []
 # * non-default features
 backup-control = []
 colors = []
-checksum = []
+checksum = ["data-encoding", "thiserror", "regex", "sum"]
 encoding = ["data-encoding", "data-encoding-macro", "z85", "thiserror"]
 entries = ["libc"]
 fs = ["dunce", "libc", "winapi-util", "windows-sys"]

@@ -7,6 +7,11 @@
 //spell-checker: ignore (linux) winsize xpixel ypixel setrlimit FSIZE
 
 #![allow(dead_code)]
+#![allow(
+    clippy::too_many_lines,
+    clippy::should_panic_without_expect,
+    clippy::missing_errors_doc
+)]
 
 #[cfg(unix)]
 use libc::mode_t;
@@ -77,9 +82,9 @@ fn read_scenario_fixture<S: AsRef<OsStr>>(tmpd: &Option<Rc<TempDir>>, file_rel_p
 /// within a struct which has convenience assertion functions about those outputs
 #[derive(Debug, Clone)]
 pub struct CmdResult {
-    /// bin_path provided by `TestScenario` or `UCommand`
+    /// `bin_path` provided by `TestScenario` or `UCommand`
     bin_path: PathBuf,
-    /// util_name provided by `TestScenario` or `UCommand`
+    /// `util_name` provided by `TestScenario` or `UCommand`
     util_name: Option<String>,
     //tmpd is used for convenience functions for asserts against fixtures
     tmpd: Option<Rc<TempDir>>,
@@ -793,7 +798,7 @@ pub fn compare_xattrs<P: AsRef<std::path::Path>>(path1: P, path2: P) -> bool {
                 attrs.sort();
                 attrs
             })
-            .unwrap_or_else(|_| Vec::new())
+            .unwrap_or_default()
     };
 
     get_sorted_xattrs(path1) == get_sorted_xattrs(path2)
@@ -1446,7 +1451,7 @@ impl UCommand {
     /// This is useful to test behavior that is only active if e.g. [`stdout.is_terminal()`] is [`true`].
     /// This function uses default terminal size and attaches stdin, stdout and stderr to that terminal.
     /// For more control over the terminal simulation, use `terminal_sim_stdio`
-    /// (unix: pty, windows: ConPTY[not yet supported])
+    /// (unix: pty, windows: `ConPTY`[not yet supported])
     #[cfg(unix)]
     pub fn terminal_simulation(&mut self, enable: bool) -> &mut Self {
         if enable {
@@ -1483,7 +1488,7 @@ impl UCommand {
             // Input/output error (os error 5) is returned due to pipe closes. Buffer gets content anyway.
             Err(e) if e.raw_os_error().unwrap_or_default() == 5 => {}
             Err(e) => {
-                eprintln!("Unexpected error: {:?}", e);
+                eprintln!("Unexpected error: {e:?}");
                 panic!("error forwarding output of pty");
             }
         }
@@ -1491,7 +1496,6 @@ impl UCommand {
 
     #[cfg(unix)]
     fn spawn_reader_thread(
-        &self,
         captured_output: Option<CapturedOutput>,
         pty_fd_master: OwnedFd,
         name: String,
@@ -1678,7 +1682,7 @@ impl UCommand {
                     slave: po_slave,
                     master: po_master,
                 } = nix::pty::openpty(&terminal_size, None).unwrap();
-                captured_stdout = self.spawn_reader_thread(
+                captured_stdout = Self::spawn_reader_thread(
                     captured_stdout,
                     po_master,
                     "stdout_reader".to_string(),
@@ -1691,7 +1695,7 @@ impl UCommand {
                     slave: pe_slave,
                     master: pe_master,
                 } = nix::pty::openpty(&terminal_size, None).unwrap();
-                captured_stderr = self.spawn_reader_thread(
+                captured_stderr = Self::spawn_reader_thread(
                     captured_stderr,
                     pe_master,
                     "stderr_reader".to_string(),
@@ -1754,7 +1758,7 @@ impl UCommand {
 
     /// Spawns the command, feeds the stdin if any, waits for the result
     /// and returns a command result.
-    /// It is recommended that you instead use succeeds() or fails()
+    /// It is recommended that you instead use `succeeds()` or `fails()`
     pub fn run(&mut self) -> CmdResult {
         self.run_no_wait().wait().unwrap()
     }
@@ -1762,7 +1766,7 @@ impl UCommand {
     /// Spawns the command, feeding the passed in stdin, waits for the result
     /// and returns a command result.
     /// It is recommended that, instead of this, you use a combination of `pipe_in()`
-    /// with succeeds() or fails()
+    /// with `succeeds()` or `fails()`
     pub fn run_piped_stdin<T: Into<Vec<u8>>>(&mut self, input: T) -> CmdResult {
         self.pipe_in(input).run()
     }
@@ -3840,7 +3844,7 @@ mod tests {
 
         std::assert_eq!(
             String::from_utf8_lossy(out.stdout()),
-            format!("{}\r\n", message)
+            format!("{message}\r\n")
         );
         std::assert_eq!(String::from_utf8_lossy(out.stderr()), "");
     }
